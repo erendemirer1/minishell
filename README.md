@@ -1,125 +1,116 @@
 # minishell
 
-This project is a small shell implementation built around core POSIX behavior.  
-The goal is not only to execute commands, but to manage lexer/parsing, process flow, redirections, heredoc, and environment mutations in a consistent execution pipeline.
+A lightweight, POSIX-compliant UNIX command interpreter built in C.
 
-## Scope
+This project recreates the fundamental architecture of GNU Bash, covering lexical analysis, AST tokenization, environment state management, multi-stage process pipelines, file descriptor redirection, and asynchronous signal handling.
 
-This minishell covers:
+---
 
-- Interactive command line (`readline` + history)
-- Token generation and command representation on a linked list (`t_cmd`)
-- Multi-process execution with pipe chains (`|`)
-- Redirection operators:
-  - `<`
-  - `>`
-  - `>>`
-  - `<<` (heredoc)
-- Environment variable expansion (`$VAR`, `$?`)
-- Builtin commands:
-  - `cd`
-  - `pwd`
-  - `echo`
-  - `env`
-  - `export`
-  - `unset`
-  - `exit`
-- `PATH` resolution and external command execution with `execve`
-- `SIGINT` / `SIGQUIT` signal handling
+## Architecture Overview
 
-## Build and Run
+Minishell operates as an event loop that reads, parses, transforms, and executes commands while maintaining runtime state consistency across child processes and builtins.
+
+```
+                  [ User Input (readline) ]
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. LEXICAL ANALYSIS & TOKEN GENERATION                      │
+│    ├── Quote state machine (single & double quotes)         │
+│    ├── Dynamic variable expansion ($VAR, $?)                │
+│    └── Linked-list token stream (t_cmd)                     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. SYNTAX VALIDATION & PRE-EXECUTION                        │
+│    ├── Grammar check (consecutive pipes, unclosed tokens)   │
+│    └── Heredoc pre-buffering (<<) via pipe file descriptors │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. PIPELINE & EXECUTION ENGINE                              │
+│    ├── Builtin dispatcher (cd, echo, pwd, export, unset...) │
+│    ├── Fork / Pipe / Dup2 process chaining                  │
+│    └── PATH lookup and external binary execution (execve)   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Core Components
+
+### 1. Lexer & Parsing Pipeline (`cmd1.c`, `cmd2.c`, `token_control.c`)
+- Converts raw input into a singly linked list (`t_cmd`), categorizing tokens into arguments (`NONE`) and control operators (`PIPE`, `INPUT`, `HEREDOC`, `WRITE`, `REWRITE`).
+- Handles quote masking rules: preserves literals inside single quotes (`'...'`) and enables variable expansion within double quotes (`"..."`).
+- Expands `$VAR` and exit status `$?` dynamically before grammar evaluation.
+
+### 2. Environment Store (`env1.c`, `env2.c`, `env3.c`)
+- Maintains an in-memory key-value linked list (`t_env`) synchronized with the host environment.
+- Mutated dynamically at runtime by `export`, `unset`, and directory navigation (`cd` updating `PWD` and `OLDPWD`).
+
+### 3. Process Chaining & IPC (`exec.c`, `redirection.c`)
+- Implements linear command chaining across arbitrary pipe lengths (`cmd1 | cmd2 | ... | cmdN`).
+- Manages bidirectional file descriptor manipulation using `dup2()`, isolating standard streams and resolving input/output redirections (`<`, `>`, `>>`, `<<`).
+- Collects child termination statuses via `waitpid()`, mapping standard UNIX exit codes to `$?`.
+
+### 4. Asynchronous Signal Handling (`signal.c`)
+- Configures non-interactive and interactive signal handlers for `SIGINT` (Ctrl+C) and `SIGQUIT` (Ctrl+\).
+- Prevents prompt corruption during blocking child process execution and active heredoc inputs.
+
+### 5. Built-in Commands
+Implements native in-process command execution without spawning child processes:
+- `echo` (with multi-flag support: `-n`, `-nnn`)
+- `cd` (relative, absolute, home, and oldpwd navigation)
+- `pwd` (current working directory resolution)
+- `export` (alphabetically sorted environment dump or variable assignment)
+- `unset` (variable removal)
+- `env` (environment inspection)
+- `exit` (clean state termination with custom numeric exit codes)
+
+---
+
+## Compilation & Usage
+
+### Prerequisites
+- GCC / Clang
+- GNU Make
+- `libreadline` development headers
+
+### Build Targets
 
 ```bash
+# Compile standard executable
 make
+
+# Run interactive shell
 ./minishell
+
+# Compile and run with automatic cleanup
+make run
+
+# Run with Valgrind memory leak verification
+make v
+
+# Run 42 Norminette compliance check
+make n
+
+# Clean build artifacts
+make fclean
 ```
 
-Shortcuts:
+---
 
-```bash
-make run    # re + run + fclean
-make v      # run with valgrind
-make n      # run norminette checks
-```
+## Memory Lifecycle & Rigor
 
-> Note: Build depends on the `readline` library.
+Minishell is engineered with strict dynamic memory management practices:
+- Heap allocations for token streams, temporary environment clones, and execution buffers are explicitly reclaimed on command completion and syntax errors (`free1.c`, `free2.c`).
+- Zero memory leaks across interactive sessions and child termination, verified through Valgrind instrumentation.
+- Fully compliant with 42 Network C coding standards (Norminette).
 
-## Architecture Summary
+---
 
-### 1) Input and Prompt
+## License
 
-On each loop iteration in `minishell.c`:
-
-1. Collects current working directory and HOME information
-2. Builds the prompt string
-3. Reads user input through `readline`
-4. Pushes non-empty inputs to history
-
-### 2) Parsing Layer
-
-The command line is transformed into a `t_cmd` linked list via `create_cmd`:
-
-- Regular words are stored as `token = NONE`
-- Operators are stored as separate nodes (`PIPE`, `INPUT`, `HEREDOC`, `WRITE`, `REWRITE`)
-- Quote handling and `$` expansion are processed during parsing
-
-This structure simplifies token consumption during redirection and execution.
-
-### 3) Syntax Checks + Heredoc Preparation
-
-Before execution, there are two critical steps:
-
-- Detect invalid token sequences (e.g. consecutive `|` or missing operands)
-- Pre-read heredoc blocks and bind them to pipe fds
-
-This ensures input sources are prepared before actual command execution begins.
-
-### 4) Redirection Application
-
-In `redirection.c`, the command list is traversed to:
-
-- Open target files/fds
-- Apply required `dup2` mappings
-- Remove consumed redirection token nodes from the list
-
-After that, only executable command arguments remain.
-
-### 5) Execution Model
-
-In `exec.c`:
-
-- If piping exists, processes are chained with `fork + pipe + dup2`
-- Builtins and external commands are separated
-- External command paths are resolved and executed via `execve`
-- Parent process collects exit status with `waitpid`
-
-The `$?` value is updated from this status.
-
-## Data Structures
-
-### `t_cmd`
-Singly linked list for tokenized command flow.
-
-### `t_env`
-Key/value list for environment variables; actively mutated by builtins such as `export`, `unset`, and `cd`.
-
-### `t_ms`
-Carries the full runtime state of the shell:
-
-- active command list
-- environment list
-- heredoc fds
-- latest status code
-- temporary parsing buffers
-
-## Behavior Notes
-
-- `cd` updates `PWD` and `OLDPWD`
-- `echo` supports repeated `-n` variants (`-n`, `-nnn`, ...)
-- `export` without arguments prints environment entries in sorted form
-- Commands not found in PATH return the expected error status
-
-## Technical Focus
-
-This repo targets much more than “read input and run command.”  
-Its core focus is modeling shell behavior as a deterministic and manageable state machine inside a compact implementation.
+Developed as part of the 42 Network curriculum. Released under the MIT License.
