@@ -1,22 +1,22 @@
 # minishell
 
-Bu proje, POSIX davranışını temel alan küçük bir kabuk (shell) implementasyonudur.  
-Amaç sadece komut çalıştırmak değil; lexer/parsing, süreç yönetimi, redirection, heredoc ve environment mutasyonlarını tek bir akış içinde doğru şekilde yönetmektir.
+This project is a small shell implementation built around core POSIX behavior.  
+The goal is not only to execute commands, but to manage lexer/parsing, process flow, redirections, heredoc, and environment mutations in a consistent execution pipeline.
 
-## Kapsam
+## Scope
 
-Bu minishell şu başlıkları hedefler:
+This minishell covers:
 
-- İnteraktif komut satırı (`readline` + history)
-- Token üretimi ve komutların bağlı liste (`t_cmd`) üzerinde temsil edilmesi
-- Pipe zincirleri (`|`) ile çoklu süreç yürütme
-- Redirection operatörleri:
+- Interactive command line (`readline` + history)
+- Token generation and command representation on a linked list (`t_cmd`)
+- Multi-process execution with pipe chains (`|`)
+- Redirection operators:
   - `<`
   - `>`
   - `>>`
   - `<<` (heredoc)
-- Ortam değişkeni genişletme (`$VAR`, `$?`)
-- Builtin komutlar:
+- Environment variable expansion (`$VAR`, `$?`)
+- Builtin commands:
   - `cd`
   - `pwd`
   - `echo`
@@ -24,102 +24,102 @@ Bu minishell şu başlıkları hedefler:
   - `export`
   - `unset`
   - `exit`
-- `PATH` çözümleme ve `execve` ile external command çalıştırma
-- `SIGINT` / `SIGQUIT` yönetimi
+- `PATH` resolution and external command execution with `execve`
+- `SIGINT` / `SIGQUIT` signal handling
 
-## Derleme ve Çalıştırma
+## Build and Run
 
 ```bash
 make
 ./minishell
 ```
 
-Kısa yollar:
+Shortcuts:
 
 ```bash
-make run    # re + çalıştır + fclean
-make v      # valgrind ile çalıştır
-make n      # norminette kontrolü
+make run    # re + run + fclean
+make v      # run with valgrind
+make n      # run norminette checks
 ```
 
-> Not: Derleme `readline` kütüphanesine bağlıdır.
+> Note: Build depends on the `readline` library.
 
-## Mimari Özeti
+## Architecture Summary
 
-### 1) Giriş ve Prompt
+### 1) Input and Prompt
 
-`minishell.c` döngüsü her iterasyonda:
+On each loop iteration in `minishell.c`:
 
-1. Güncel çalışma dizinini ve HOME bilgisini toplar
-2. Prompt string’ini üretir
-3. `readline` ile kullanıcı girdisini alır
-4. Boş olmayan girdileri history’ye ekler
+1. Collects current working directory and HOME information
+2. Builds the prompt string
+3. Reads user input through `readline`
+4. Pushes non-empty inputs to history
 
-### 2) Parse Katmanı
+### 2) Parsing Layer
 
-Komut satırı `create_cmd` akışıyla `t_cmd` bağlı listesine dönüştürülür:
+The command line is transformed into a `t_cmd` linked list via `create_cmd`:
 
-- Normal kelimeler `token = NONE`
-- Operatörler ayrı node olarak tutulur (`PIPE`, `INPUT`, `HEREDOC`, `WRITE`, `REWRITE`)
-- Quote ve `$` genişletmesi parsing aşamasında işlenir
+- Regular words are stored as `token = NONE`
+- Operators are stored as separate nodes (`PIPE`, `INPUT`, `HEREDOC`, `WRITE`, `REWRITE`)
+- Quote handling and `$` expansion are processed during parsing
 
-Bu tasarım, redirection ve execution aşamasında “token tüketme” işini basitleştirir.
+This structure simplifies token consumption during redirection and execution.
 
-### 3) Sözdizimi Kontrolü + Heredoc Hazırlığı
+### 3) Syntax Checks + Heredoc Preparation
 
-Execution öncesi iki kritik adım var:
+Before execution, there are two critical steps:
 
-- Geçersiz token dizilimlerini yakalama (ör. ardışık `|` veya eksik operand)
-- Heredoc bloklarını önceden okuyup pipe fd’lerine bağlama
+- Detect invalid token sequences (e.g. consecutive `|` or missing operands)
+- Pre-read heredoc blocks and bind them to pipe fds
 
-Böylece gerçek execute aşamasına girildiğinde giriş kaynakları hazır olur.
+This ensures input sources are prepared before actual command execution begins.
 
-### 4) Redirection Uygulaması
+### 4) Redirection Application
 
-`redirection.c` içinde komut listesi üzerinde ilerlenir:
+In `redirection.c`, the command list is traversed to:
 
-- İlgili dosya/fd açılır
-- Gerekli `dup2` bağlamaları yapılır
-- Kullanılmış redirection token node’ları listeden temizlenir
+- Open target files/fds
+- Apply required `dup2` mappings
+- Remove consumed redirection token nodes from the list
 
-Bu sayede geriye sadece yürütülecek komut argümanları kalır.
+After that, only executable command arguments remain.
 
-### 5) Yürütme Modeli
+### 5) Execution Model
 
-`exec.c` tarafında:
+In `exec.c`:
 
-- Pipe varsa süreçler `fork + pipe + dup2` ile zincirlenir
-- Builtin ve external command ayrımı yapılır
-- External command için `PATH` çözülüp `execve` çağrılır
-- Parent süreç `waitpid` ile exit status toplar
+- If piping exists, processes are chained with `fork + pipe + dup2`
+- Builtins and external commands are separated
+- External command paths are resolved and executed via `execve`
+- Parent process collects exit status with `waitpid`
 
-`$?` değeri bu status üzerinden güncellenir.
+The `$?` value is updated from this status.
 
-## Veri Yapıları
+## Data Structures
 
 ### `t_cmd`
-Tokenize edilmiş komut akışı için tek yönlü bağlı liste.
+Singly linked list for tokenized command flow.
 
 ### `t_env`
-Environment değişkenleri için key/value listesi; `export`, `unset`, `cd` gibi built-in’lerde aktif olarak mutasyona uğrar.
+Key/value list for environment variables; actively mutated by builtins such as `export`, `unset`, and `cd`.
 
 ### `t_ms`
-Uygulamanın çalışma anındaki tüm state’ini taşır:
+Carries the full runtime state of the shell:
 
-- aktif komut listesi
-- env listesi
-- heredoc fd’leri
-- son status kodu
-- geçici parse string’leri
+- active command list
+- environment list
+- heredoc fds
+- latest status code
+- temporary parsing buffers
 
-## Davranış Notları
+## Behavior Notes
 
-- `cd` çalıştığında `PWD`/`OLDPWD` güncellenir
-- `echo`, birden fazla `-n` varyasyonunu destekler (`-n`, `-nnn`, ...)
-- `export` argümansız çağrıldığında ortamı sıralı biçimde basar
-- PATH içinde bulunamayan komutlarda uygun hata kodu döner
+- `cd` updates `PWD` and `OLDPWD`
+- `echo` supports repeated `-n` variants (`-n`, `-nnn`, ...)
+- `export` without arguments prints environment entries in sorted form
+- Commands not found in PATH return the expected error status
 
-## Teknik Odak
+## Technical Focus
 
-Bu repo “girdi al, komut çalıştır” seviyesinden çok daha fazlasını hedefler:  
-asıl odak, shell davranışını küçük bir çekirdekte deterministik ve yönetilebilir bir state makinesi olarak modelleyebilmektir.
+This repo targets much more than “read input and run command.”  
+Its core focus is modeling shell behavior as a deterministic and manageable state machine inside a compact implementation.
