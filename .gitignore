@@ -1,0 +1,21 @@
+# Binaries and Objects
+minishell
+*.o
+*.a
+*.dSYM/
+
+# OS Artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor & IDE configs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
